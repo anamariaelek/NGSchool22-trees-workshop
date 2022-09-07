@@ -1,0 +1,4 @@
+SFTPC	decision_tree	1.50421943733904
+SFTPC	bagging	1.31116150086173
+SFTPC	random_forest	1.15515564698632
+SFTPC	conditional_random_forest	1.15606422534294

@@ -41,7 +41,12 @@ message(
 )
 tpm <- tpm[, -not_expressed]
 
-# remove lowly expressed genes (important for TFs, i.e. variables)
+# log transform
+tpm <- log(tpm+1)
+quants <- t(apply(tpm, 1, quantile))
+head(quants)
+
+# remove lowly expressed genes 
 low_expressed <- which(colSums(tpm) < 100)
 message(
   length(low_expressed), " lowly expressed genes, of which ",
@@ -49,22 +54,29 @@ message(
 )
 tpm <- tpm[, -low_expressed]
 
-# keep tfs for modeling
+# how many TFs (i.e. variables) we have left?
 all_tfs <- tfs[tfs %in% colnames(tpm)]
+message(length(tfs), " features")
 
 # train-test split
 set.seed(1950)
-tpm_train_id <- sample(1:nrow(tpm), size = 0.7*nrow(tpm))
+tpm_train_id <- sample(1:nrow(tpm), size = 0.9*nrow(tpm))
 tpm_train <- tpm[tpm_train_id, ]
 tpm_test  <- tpm[-tpm_train_id, ]
 message( nrow(tpm_train), " training samples")
 message( nrow(tpm_test), " test samples")
-message(length(tfs), " features")
 
 # outcome variables
-genes_ord <- sort(colSums(tpm), decreasing = TRUE)
-genes_ord <- genes_ord[!grepl("MT_",names(genes_ord))]
-genes <- names(genes_ord)[1:2]
+marker_genes <- c(
+  # markers
+  "SFTPC", "SFTPB", "SCGB1A1", "AGER", "SLC34A2", "CLDN18",
+  # TFs
+  "SOX13", "TBX3", "ERG", "KLF7", "CASZ1", "ETS1", "NKX2_1"
+)
+lung_genes_dt <- fread("data/Lung-genes-FEB4-6-774-s002.csv")
+lung_genes_dt[,`Gene name`:=str_replace(`Gene name`,"-","_")] # - causes formula to break
+lung_genes_dt <- lung_genes_dt[`Gene name` %in% colnames(tpm)]
+genes <- unique(c(marker_genes, lung_genes_dt$`Gene name`))
 
 # unique run id
 name <- str_replace_all(Sys.time(),"[-: ]","")
@@ -74,11 +86,11 @@ gene_res <- sapply(genes, function(gene) {
   
   # outcome variable
   message(
-    ". . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    ". . . . . . . . . . . . . . . . . . . . . . . . ",
     Sys.time(), 
-    ". . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ."
+    ". . . . . . . . . . . . . . . . . . . . . . . . "
   )
-  message("Building models for ", gene, "(", match(gene,genes), "/", length(genes), ")")
+  message("Building models for ", gene, " (", match(gene,genes), "/", length(genes), ")")
 
   # predictor variables
   tfs <- setdiff(all_tfs, gene)
@@ -89,8 +101,8 @@ gene_res <- sapply(genes, function(gene) {
 
   # parameter grid search
   hyper_grid <- expand.grid(
-    minsplit = seq(20, 40, 1),
-    maxdepth = seq(20, 40, 1)
+    minsplit = seq(20, 40, 2),
+    maxdepth = seq(20, 40, 2)
   )
   
   tpm_list <- lapply(1:nrow(hyper_grid), function(i) {
@@ -143,14 +155,14 @@ gene_res <- sapply(genes, function(gene) {
     rmse = rmse
   )
   
-  # # # # # # # # # # # # # #
-  #          BAGGING        #
-  # # # # # # # # # # # # # #
+  # # # # # # # # # # # # # # #
+  #          BAGGING          #
+  # # # # # # # # # # # # # # #
   
   require(ipred)
 
   # get OOB errors for models with range of bagged trees
-  nbagg <- seq(10, 200, 1)
+  nbagg <- seq(10, 100, 5)
   rmse <- sapply(nbagg, function(i) {
     bt <- bagging(
       formula = as.formula(paste(gene, "~ .", collapse = " ")),
@@ -173,13 +185,13 @@ gene_res <- sapply(genes, function(gene) {
   
   # predict
   pred <- predict(bagging_tree, newdata = tpm_test[, tfs])
-  RMSE(pred = pred, obs = tpm_test[, gene])
+  rmse <- RMSE(pred = pred, obs = tpm_test[, gene])
   message(sprintf("Bagging RMSE = %.1f", rmse))
   fwrite(data.table(gene, "bagging", rmse), file.path(res_dir, sprintf("%s.rmse.txt",name)), col.names = FALSE, sep = "\t", append = TRUE)
   
   # to output
   bag_out <- list(
-    params = hyper_grid[i,],
+    params = rmse_df,
     rmse = rmse
   )
   
@@ -187,68 +199,146 @@ gene_res <- sapply(genes, function(gene) {
   #      RANDOM FOREST      #
   # # # # # # # # # # # # # #
   
-  # hyperparameter grid search
+  # set up a 3-fold cross validation
+  ctrl <- trainControl(method = "cv",  number = 3) 
+  
+  # parameter grid search
   hyper_grid <- expand.grid(
-    ntree = 200,
-    mtry = seq(250, 550, by = 10),
-    sample.fraction = seq(0.8, 1, 0.1),
-    min.node.size = seq(8, 10, by = 2)
+    splitrule = "variance", # has to be included even if not changing it
+    mtry = seq(1050, 1250, by = 50),
+    min.node.size = seq(5, 12, by = 1)
   )
+  
   # total number of combinations
   nrow(hyper_grid)
   
-  # loop
-  hyper_grid_vals <- sapply(1:nrow(hyper_grid), function(i) {
-    rf_tree <- ranger(
-      x = tpm_train[,tfs],
-      y = tpm_train[,gene],
-      num.trees = hyper_grid[i,"ntree"],
-      mtry = hyper_grid[i,"mtry"],
-      min.node.size = hyper_grid[i,"min.node.size"],
-      sample.fraction = hyper_grid[i,"sample.fraction"],
-      importance = "impurity"
-    )
-    sqrt(rf_tree$prediction.error)
-  })
-  
-  # add to grid
-  hyper_grid$rmse <- hyper_grid_vals
-  
-  # build model with best params
-  i <- which.min(hyper_grid$rmse)
-  rf_tree <- ranger(
+  # build models without CV or importance calculation
+  rf_tree <- caret::train(
     x = tpm_train[,tfs],
     y = tpm_train[,gene],
-    num.trees = hyper_grid[i,]$ntree,
-    mtry = hyper_grid[i,]$mtry,
-    min.node.size = hyper_grid[i,]$min.node.size,
-    sample.fraction = hyper_grid[i,]$sample.fraction,
-    importance = "impurity"
+    method = "ranger",
+    trControl = ctrl,
+    tuneGrid = hyper_grid,
+    num.trees =  300, 
+    importance = "none"
+  )
+  
+  grid_res <- rf_tree$results
+  
+  # set up a 10-fold cross validation
+  ctrl <- trainControl(method = "cv",  number = 10) 
+  
+  # parameter grid with fixed best values
+  i <- which.min(grid_res$RMSE)
+  tuned_grid <- expand.grid(
+    splitrule = "variance", 
+    mtry = grid_res$mtry[i],
+    min.node.size = grid_res$min.node.size[i]
+  )
+  
+  # CV rf model with importance calculation
+  rf_tree <- caret::train(
+    x = tpm_train[,tfs],
+    y = tpm_train[,gene],
+    method = "ranger",
+    trControl = ctrl,
+    tuneGrid = tuned_grid,
+    num.trees = 300, 
+    importance = "permutation"
   )
   
   # predict
   pred <- predict(rf_tree, tpm_test[, tfs])
-  rmse <- RMSE(pred = pred$predictions, obs = tpm_test[, gene])
+  rmse <- RMSE(pred = pred, obs = tpm_test[, gene])
 
   message(sprintf("Random Forest RMSE = %.1f", rmse))
   fwrite(data.table(gene, "random_forest", rmse), file.path(res_dir, sprintf("%s.rmse.txt",name)), col.names = FALSE, sep = "\t", append = TRUE)
   
   # variable importance
   varimp <- as.data.table(varImp(rf_tree)$importance, keep.rownames = "Variable") 
-  varimp[, gene:=gene]
-  fwrite(varimp, file.path(res_dir, sprintf("%s.varimp.txt",name)), col.names = FALSE, sep = "\t", append = TRUE)
-  
-  # roc
+  setnames(varimp, c("Overall", "varimp"))
   rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
   rocimp <- as.data.table(rocimp, keep.rownames = "Variable") 
-  rocimp[, gene:=gene]
-  fwrite(rocimp, file.path(res_dir, sprintf("%s.varimp.roc.txt",name)), col.names = FALSE, sep = "\t", append = TRUE)
+  setnames(varimp, c("Overall", "roc"))
+  
+  # save
+  vardt <- merge.data.table(varimp, rocimp, by="Variable", all = TRUE)[, gene:=gene]
+  fwrite(vardt, file.path(res_dir, sprintf("%s.varimp.rf.txt",name)), col.names = TRUE, sep = "\t", append = TRUE)
   
   # to output
   rf_out <- list(
-    params = hyper_grid[i,],
+    params = tuned_grid,
     rmse = rmse,
-    varimp = varimp
+    varimp = varimp,
+    rocimp = rocimp
+  )
+  
+  # # # # # # # # # # # # # # # # # # # #
+  #    CONDITIONAL RANDOM FOREST        #
+  # # # # # # # # # # # # # # # # # # # #
+  
+  # hyperparameter grid search
+  hyper_grid <- expand.grid(
+    mtry = seq(1050, 1250, by = 50)
+  )
+  
+  # total number of combinations
+  nrow(hyper_grid)
+  
+  # build models without CV or importance calculation
+  crf_tree <- caret::train(
+    x = tpm_train[,tfs],
+    y = tpm_train[,gene],
+    method = "cforest",
+    trControl = ctrl,
+    tuneGrid = hyper_grid
+  )
+  
+  # save
+  grid_res <- crf_tree$results
+  
+  # set up a 10-fold cross validation
+  ctrl <- trainControl(method = "cv",  number = 10) 
+  
+  # parameter grid with fixed best values
+  i <- which.min(grid_res$RMSE)
+  tuned_grid <- expand.grid(
+    mtry = grid_res$mtry[i]
+  )
+  
+  # CV rf model with importance calculation
+  crf_tree <- caret::train(
+    x = tpm_train[,tfs],
+    y = tpm_train[,gene],
+    method = "cforest",
+    trControl = ctrl,
+    tuneGrid = tuned_grid
+  )
+  
+  # predict
+  pred <- predict(crf_tree, tpm_test[, tfs])
+  rmse <- RMSE(pred = pred, obs = tpm_test[, gene])
+  
+  message(sprintf("Conditional Random Forest RMSE = %.1f", rmse))
+  fwrite(data.table(gene, "conditional_random_forest", rmse), file.path(res_dir, sprintf("%s.rmse.txt",name)), col.names = FALSE, sep = "\t", append = TRUE)
+  
+  # variable importance
+  varimp <- as.data.table(varImp(crf_tree)$importance, keep.rownames = "Variable") 
+  setnames(varimp, c("Overall", "varimp"))
+  rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
+  rocimp <- as.data.table(rocimp, keep.rownames = "Variable") 
+  setnames(varimp, c("Overall", "roc"))
+  
+  # save
+  vardt <- merge.data.table(varimp, rocimp, by="Variable", all = TRUE)[, gene:=gene]
+  fwrite(vardt, file.path(res_dir, sprintf("%s.varimp.crf.txt",name)), col.names = TRUE, sep = "\t", append = TRUE)
+  
+  # to output
+  crf_out <- list(
+    params = tuned_grid,
+    rmse = rmse,
+    varimp = varimp,
+    rocimp = rocimp
   )
   
   # # # # # # # # # #
@@ -258,7 +348,8 @@ gene_res <- sapply(genes, function(gene) {
   list(
     decision_tree = tree_out,
     bagging = bag_out,
-    random_fores = rf_out
+    random_fores = rf_out,
+    conditiona_random_forest = crf_out
   )
   
 }, USE.NAMES = TRUE, simplify = FALSE)

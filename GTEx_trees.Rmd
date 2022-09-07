@@ -13,7 +13,7 @@ output:
 
 In this workshop we are going to use tree-based methods to construct Gene Regulatory Networks (GRNs).
 
-## Motivation
+## Introduction
 
 The expression of each gene is regulated by a set of transcription factors (TFs). If a level of TF expression is changed (e.g. a TF is knocked-down), the expression level of it's downstream target genes will be afffected. We can therfore build a model that predicts expression of a particular gene based on the expression of it's potential regulators. Then, by grouping TFs and their targets based on this coordinated co-expression, we can obtain simple Gene Regulatory Networks (GRNs).
 
@@ -29,31 +29,50 @@ Tree based methods are particularly suitable for this problem because:
 library(data.table)
 library(stringr)
 library(ggplot2)
-library(patchwork)
 library(caret)
 library(rpart)
 library(rpart.plot)
 library(ipred)
 library(ranger)
+library(party)
 ```
 
 ## Data
 
 GTEx portal contains gene expression data for various human tissues, you can access the data [here](https://www.gtexportal.org/home/datasets#filesetFilesDiv131).  
-We will work with 578 lung samples.
 
-```{r}
+We will use transcript-per-million (TPM) normalized gene counts. This normalization accounts for different sequencing depths in different samples (i.e. features are on the same scale and comparable between samples). TPM is, however, biased by gene length (i.e. longer genes are going to have more TPMs than a shorter gene expressed at the same level). Think about this problem, how we should deal with it?
+  
+We will work with 578 lung samples. You can download the data directly from GTEx (it should not take long), or load the local copy.
+
+```{r eval=FALSE}
+# download data from GTEx portal
 url <- "https://storage.googleapis.com/gtex_analysis_v8/rna_seq_data/gene_reads/gene_reads_2017-06-05_v8_lung.gct.gz"
 dt <- fread(url)
+```
+
+```{r}
+# load local copy of data
+dt <- fread("data/gene_tpm_2017-06-05_v8_lung.gct.gz")
+```
+
+```{r}
+# dimensions
 dim(dt)
 dt[1:10,1:10]
 ```
 
-There are 56,200 genes (variables) in our data. We will include additional column to specify if the gene is a TF or not, which will be used later to select model features. You can download a list of 1639 human TFs from the curated database [here](http://humantfs.ccbr.utoronto.ca/download.php).
+There are 56,200 genes from 578 lung samples in our data.  
+Since we will only use TFs as variabes in our model, we will include additional column to specify if the gene is a TF or not. You can download a list of 1639 human TFs from the curated database [here](http://humantfs.ccbr.utoronto.ca/download.php), or again, load a local copy of this data.
 
-```{r}
+```{r eval=FALSE}
+# download TF data
 url <- "http://humantfs.ccbr.utoronto.ca/download/v_1.01/TFs_Ensembl_v_1.01.txt"
 tfs <- readLines(url)
+```
+```{r}
+# load local copy of TF data
+tfs <- readLines("data/TFs_Ensembl_v_1.01.txt")
 head(tfs)
 length(tfs)
 
@@ -62,26 +81,28 @@ dt[, Name := str_remove(Name, "\\.\\d+$")]
 
 # add TF info
 dt[,TF := ifelse(Name %in% tfs, TRUE, FALSE)]
-setcolorder(dt, c("id", "Name", "Description", "TF"))
 
 # most of TFs are present in our GTEx data.
 dt[, .N, TF]
 
 # we will use more informative gene names instead of ensembl IDs
+dt[,Description:=str_replace(Description,"-","_")] # - causes formula to break
 tfs <- dt[TF == TRUE, Description]
 ```
 
 Let's do some exploratory data analysis.
 
 ```{r}
+# extract only TPM values
 tpm <- dt[,-c(1:4)]
+# transpose to have observations in rows and features in columns
 tpm <- as.data.frame(t(tpm))
 colnames(tpm) <- dt$Description
 quants <- t(apply(tpm, 1, quantile))
 head(quants)
 ```
 
-We can remove genes that are not expressed, or are very lowly expressed in most of the samples.
+We can remove genes that are not expressed in any sample.
 
 ```{r warning=FALSE, message=FALSE, fig.height=6, fig.width=8}
 # remove genes not expressed in any sample
@@ -90,11 +111,26 @@ length(not_expressed)
 tpm <- tpm[, -not_expressed]
 quants <- t(apply(tpm, 1, quantile))
 head(quants)
+```
 
+Log transform the data and remove genes that are very lowly expressed in most of the samples.
+
+```{r}
 # log transform
 tpm <- log(tpm+1)
 quants <- t(apply(tpm, 1, quantile))
 head(quants)
+
+# remove lowly expressed genes
+hist(colSums(tpm), breaks = 50); abline(v=100, col="red")
+low_expressed <- which(colSums(tpm) < 100)
+sum(names(low_expressed) %in% tfs)
+tpm <- tpm[, -low_expressed]
+
+# how many TFs (i.e. variables) we have left?
+tfs <- tfs[tfs %in% colnames(tpm)]
+length(tfs)
+
 ```
 ```{r include=FALSE, eval=FALSE}
 # TPM distribution for TFs vs non-TFs
@@ -108,22 +144,8 @@ gp <- ggplot(dtm, aes(TPM, fill=TF)) +
   theme(legend.position = "none") 
 gp
 ```
-```{r}
-# remove lowly expressed genes
-hist(colSums(tpm), breaks = 100)
-low_expressed <- which(colSums(tpm) < 100)
-sum(names(low_expressed) %in% tfs)
-tpm <- tpm[, -low_expressed]
 
-# how many TFs (i.e. variables) we have left?
-tfs <- tfs[tfs %in% colnames(tpm)]
-length(tfs)
-
-# smaples
-nrow(tpm)
-```
-
-**Note**: A more sophisticated feature selection methods are available, but they will be covered in tomorrow's lectures.  
+**Note**: A more sophisticated feature selection methods are available, they will be covered in tomorrow's lectures.  
 
 Split the data into train and test samples.
 
@@ -134,24 +156,27 @@ tpm_train <- tpm[tpm_train_id, ]; nrow(tpm_train)
 tpm_test  <- tpm[-tpm_train_id, ]; nrow(tpm_test)
 ```
 
-First we will fit different regression trees to predict individual genes expression. Start with one of the following example genes for which there are pre-calculated grd search results files:  
+First we will fit different regression trees to predict individual genes expression. Start with one of the following example genes for which there are pre-calculated grid search results files:  
 
 * SFTPA1 - a member of SFTP gene family encoding lung surfactant proteins 
 * EPAS1 - a type of hypoxia-inducible factor, TFs involved in the induction of genes regulated by oxygen (it is induced as oxygen levels fall)
+* NKX2_1
 
 Same approach can then be applied to all other genes.
 
 ```{r}
 # outcome variable
-gene <- "EPAS1"
+gene <- "NKX2_1"
 
 # predictor variables
 tfs <- setdiff(tfs, gene)
 ```
 
+***
+
 ## Regression Tree Model
 
-Use `tree()` function to fit decision tree model.
+Use `rpart::tree()` function to fit decision tree model.
 
 ```{r fig.height=5, fig.width=8}
 require(rpart)
@@ -185,18 +210,19 @@ plotcp(tpm_tree)
 tpm_tree$cptable
 ```
 
-In addition to the cost complexity, other `rpart`` parameters we can tune are:  
+In addition to the cost complexity `cp`, other `rpart` parameters we can tune are:  
 
-* `minsplit`, the minimum number of data points required to attempt a split( before it is forced to create a terminal node (default is 20)  
+* `minsplit`, the minimum number of data points required to attempt a split before it is forced to create a terminal node (default is 20)  
 * `maxdepth`, the maximum number of internal nodes between the root node and the terminal nodes (default is 30).  
 
 In order to automatically tune these parameters, we create a grid search and iterate through it. 
 
-```{r message=FALSE, eval=FALSE, echo=FALSE}
+```{r message=FALSE, eval=TRUE}
 hyper_grid <- expand.grid(
   minsplit = seq(20, 40, 1),
   maxdepth = seq(20, 40, 1)
 )
+ # 
 nrow(hyper_grid)
 
 # loop over grid search
@@ -268,10 +294,6 @@ Use this model for prediction with test data.
 pred <- predict(tpm_best_tree, newdata = tpm_test[, tfs])
 RMSE(pred = pred, obs = tpm_test[, gene])
 
-RMSE(pred = pred, obs = tpm_test[, gene])
-
-quantile(tpm_test[, gene])
-
 pred_df <- data.frame(predicted=pred, actual=tpm_test[, gene])
 ggplot(pred_df, aes(predicted, actual)) + 
   geom_point() + 
@@ -286,7 +308,7 @@ The major parameter for bagging is the number of trees to average (`nbagg`, defa
 
 We can train a regression tree with bagging similarly to training a single tree, using `ipred::bagging` function. We will build models with different number of averaged trees, and retrieve out-of-the-bag OOB error for each (`ipred` does not perform CV)   
 
-```{r message=FALSE, eval=FALSE, echo=FALSE}
+```{r message=FALSE, eval=TRUE}
 require(ipred)
 
 set.seed(1950)
@@ -329,14 +351,21 @@ bagging_tree <- bagging(
 
 We can use bagging model for prediction with test data.
 
-```{r}
+```{r fig.width=6, fig.height=6}
 pred <- predict(bagging_tree, newdata = tpm_test[, tfs])
 RMSE(pred = pred, obs = tpm_test[, gene])
+
+pred_df <- data.frame(predicted=pred, actual=tpm_test[, gene])
+ggplot(pred_df, aes(predicted, actual)) + 
+  geom_point() + 
+  geom_smooth(method='lm', formula=y~x)
 ```
+
+Notice that this is only a slight improvement over simple regression tree.
 
 ### `caret`
 
-Alternatively, we can use `caret::train()` function which can fit a variety of different models, including bagging trees (see `names(getModelInfo())`). It's advantages are that it can automatically perform cross-validation and calculate variable importance.  
+Alternatively, we can use `caret::train()` function which can fit a variety of different models (238, to be precise, see info [here](https://topepo.github.io/caret/available-models.html)), including bagging trees (see `names(getModelInfo())`). It's advantages are that it can automatically perform cross-validation and calculate variable importance.  
 
 ```{r}
 require(caret)
@@ -365,20 +394,6 @@ bagging_tree
 plot(varImp(bagging_tree), 30)  
 ```
 
-Use bagging model for prediction with test data.
-
-```{r fig.width=6, fig.height=6}
-pred <- predict(bagging_tree, newdata = tpm_test[, tfs])
-RMSE(pred = pred, obs = tpm_test[, gene])
-
-pred_df <- data.frame(predicted=pred, actual=tpm_test[, gene])
-ggplot(pred_df, aes(predicted, actual)) + 
-    geom_point() + 
-    geom_smooth(method='lm', formula=y~x)
-```
-
-Notice that this is only a slight improvement over simple regression tree.
-
 ## Random Forest
 
 We can use `caret::train()` with fast `ranger` implementation of Random Forest, to train the model and do cross validation on the fly.
@@ -391,15 +406,15 @@ There are several parameters to tune for Random Forest:
 
 We will again construct the parameter grid to iterate over. We can pass it to `caret::train()` directly.
 
-```{r eval=FALSE}
+```{r eval=TRUE}
 # set up a 3-fold cross validation
 ctrl <- trainControl(method = "cv",  number = 3) 
 
 # parameter grid search
 hyper_grid <- expand.grid(
   splitrule = "variance", # has to be included even if not changing it
-  mtry = seq(50, 1000, by = 50),
-  min.node.size = seq(6, 10, by = 1)
+  mtry = seq(1050, 1250, by = 50),
+  min.node.size = seq(5, 12, by = 1)
 )
 
 # total number of combinations
@@ -431,7 +446,7 @@ grid_res <- fread(sprintf("data/hypergrid.rf.%s.csv",gene))
 ggplot(grid_res, aes(min.node.size, mtry, fill = RMSE)) + 
   geom_tile() + scale_fill_viridis_c(direction = -1)
 
-# top ones
+# top parameter combinations
 grid_res[order(RMSE)][1:5]
 ```
 
@@ -466,11 +481,18 @@ rf_tree <- caret::train(
 rf_tree
 ```
 
-Variable importance.
+Extract variable importance for model.
 
 ```{r fig.height=6, fig.width=4}
 # plot most important variables
-plot(varImp(rf_tree), 30)  
+varimp <- varImp(rf_tree)
+plot(varimp, 30)  
+as.data.table(varimp$importance, keep.rownames = "Variable")[order(-Overall)]
+
+# roc
+rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
+rocimp <- as.data.table(rocimp, keep.rownames = "Variable") 
+rocimp[order(-Overall)]
 ```
 
 Use Random Forest model for prediction with test data.
@@ -485,12 +507,117 @@ ggplot(pred_df, aes(predicted, actual)) +
     geom_smooth(method='lm', formula=y~x) 
 ```
 
+## Conditional Trees
+
+In all the models so far, trees were built by selecting for each split in the tree the variable that maximizes an information measure (e.g. Gini coefficient or ). This approach is inherently biased towards selecting variables with many splits, or many missing values. To tackle this, a different approach of building conditional trees uses instead significance test procedure to select variables instead. Significance is calculated for each covariate by permutations, and the one with the lowest p value is selected for split.
+
+We will again construct the parameter grid to iterate over. We can pass it to `caret::train()` directly.
+
+```{r eval=TRUE}
+# set up a 3-fold cross validation
+ctrl <- trainControl(method = "cv",  number = 3) 
+
+# parameter grid search
+hyper_grid <- expand.grid(
+  mtry = seq(1050, 1250, by = 50)
+)
+
+# total number of combinations
+nrow(hyper_grid)
+
+# build models without CV or importance calculation
+crf_tree <- caret::train(
+  x = tpm_train[,tfs],
+  y = tpm_train[,gene],
+  method = "cforest",
+  trControl = ctrl,
+  tuneGrid = hyper_grid
+)
+
+# save
+grid_res <- crf_tree$results
+fwrite(grid_res, file = sprintf("data/hypergrid.crf.%s.csv",gene))
+```
+
+Visualize results of grid search.
+
+```{r fig.height=6, fig.width=5}
+# load grid search results
+grid_res <- fread(sprintf("data/hypergrid.rf.%s.csv",gene))
+
+# plot
+ggplot(grid_res, aes(min.node.size, mtry, fill = RMSE)) + 
+  geom_tile() + scale_fill_viridis_c(direction = -1)
+
+# top parameter combinations
+grid_res[order(RMSE)][1:5]
+```
+
+Select best parameters obtained from grid search and build the model.
+
+```{r}
+require(caret)
+
+# set up a 10-fold cross validation
+ctrl <- trainControl(method = "cv",  number = 10) 
+
+# parameter grid with fixed best values
+i <- which.min(grid_res$RMSE)
+tuned_grid <- expand.grid(
+  mtry = grid_res$mtry[i]
+)
+
+# CV rf model with importance calculation
+crf_tree <- caret::train(
+  x = tpm_train[,tfs],
+  y = tpm_train[,gene],
+  method = "cforest",
+  trControl = ctrl,
+  tuneGrid = tuned_grid
+)
+
+# assess results
+crf_tree
+```
+
+Extract variable importance for model.
+
+```{r fig.height=6, fig.width=4}
+# plot most important variables
+varimp <- varImp(rf_tree)
+plot(varimp, 30)  
+varimp_dt <- as.data.table(varimp$importance, keep.rownames = "Variable")[order(-Overall)]
+head(varimp_dt)[[1]]
+
+# roc
+rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
+rocimp_dt <- as.data.table(rocimp, keep.rownames = "Variable")[order(-Overall)]
+head(rocimp_dt)
+```
+
+Prediction using Random Forest with conditional trees.
+
+```{r fig.width=6, fig.height=6}
+pred <- predict(crf_tree, tpm_test[, tfs])
+RMSE(pred = pred, obs = tpm_test[, gene])
+
+pred_df <- data.frame(predicted=pred, actual=tpm_test[, gene])
+ggplot(pred_df, aes(predicted, actual)) + 
+    geom_point() + 
+    geom_smooth(method='lm', formula=y~x) 
+```
 
 ## Downstream analysis
 
+Using the variable importance, we can build a network of regulators for our gene. The choice of how many TFs include in the netwok is a bit arbitrary at this point.
+
+```{r}
+
+```
+
 We can load pre-calculated model errors for different genes and order them by increasing RF RMSE.
 
-```{r eval=FALSE}
+```{r eval=TRUE}
 dt = fread("data/genes.txt")
 setnames(dt, c("genes","model","rmse"))
 dt[,genes:=factor(genes, levels=unique(dt[model=="random_forest"][order(rmse)]$genes))]
@@ -499,7 +626,7 @@ setorder(dt,genes,rmse)
 
 Random Forrest systematically outperforms single Decision Tree.
 
-```{r eval=FALSE, fig.width=6, fig.height=4}
+```{r eval=TRUE, fig.width=6, fig.height=4}
 ggplot(dt[1:100], aes(genes, rmse, color=model)) +
   geom_line(aes(group=model)) +
   geom_point() +

@@ -1,0 +1,84 @@
+Ensembl Gene ID	Gene name	Transcript factors	Essential genes	Biotype	Appeared Times of databases
+ENSG00000168484	SFTPC	-	Essential gene	protein_coding	6
+ENSG00000168878	SFTPB	-	Essential gene	protein_coding	6
+ENSG00000122852	SFTPA1	-	-	protein_coding	6
+ENSG00000149021	SCGB1A1	-	-	protein_coding	6
+ENSG00000196260	SFTA2	-	-	protein_coding	6
+ENSG00000121075	TBX4	TF	Essential gene	protein_coding	5
+ENSG00000133661	SFTPD	-	-	protein_coding	5
+ENSG00000164265	SCGB3A2	-	-	protein_coding	5
+ENSG00000185303	SFTPA2	-	-	protein_coding	5
+ENSG00000204305	AGER	-	-	protein_coding	5
+ENSG00000157765	SLC34A2	-	Essential gene	protein_coding	4
+ENSG00000066405	CLDN18	-	-	protein_coding	4
+ENSG00000131400	NAPSA	-	-	protein_coding	4
+ENSG00000166961	MS4A15	-	-	protein_coding	4
+ENSG00000198183	BPIFA1	-	-	protein_coding	4
+ENSG00000203878	CHIAP2	-	-	transcribed_unprocessed_pseudogene	4
+ENSG00000136352	NKX2-1	TF	Essential gene	protein_coding	3
+ENSG00000047936	ROS1	-	Essential gene	protein_coding	3
+ENSG00000154342	WNT3A	-	Essential gene	protein_coding	3
+ENSG00000057149	SERPINB3	-	-	protein_coding	3
+ENSG00000078081	LAMP3	-	-	protein_coding	3
+ENSG00000125999	BPIFB1	-	-	protein_coding	3
+ENSG00000134216	CHIA	-	-	protein_coding	3
+ENSG00000149435	GGTLC1	-	-	protein_coding	3
+ENSG00000156076	WIF1	-	-	protein_coding	3
+ENSG00000161055	SCGB3A1	-	-	protein_coding	3
+ENSG00000176029	C11orf16	-	-	protein_coding	3
+ENSG00000197641	SERPINB13	-	-	protein_coding	3
+ENSG00000206072	SERPINB11	-	-	protein_coding	3
+ENSG00000206073	SERPINB4	-	-	protein_coding	3
+ENSG00000222713	RN7SKP51	-	-	misc_RNA	3
+ENSG00000225383	SFTA1P	-	-	lincRNA	3
+ENSG00000228027	RP1-251M9.3	-	-	antisense	3
+ENSG00000235385	GS1-600G8.5	-	-	lincRNA	3
+ENSG00000242640	RP11-302F12.1	-	-	processed_pseudogene	3
+ENSG00000244215	RP11-88I21.2	-	-	lincRNA	3
+ENSG00000260695	RP11-513N24.1	-	-	lincRNA	3
+ENSG00000164400	CSF2	-	Essential gene	protein_coding	2
+ENSG00000170477	KRT4	-	Essential gene	protein_coding	2
+ENSG00000100012	SEC14L3	-	-	protein_coding	2
+ENSG00000105227	PRX	-	-	protein_coding	2
+ENSG00000112539	C6orf118	-	-	protein_coding	2
+ENSG00000115009	CCL20	-	-	protein_coding	2
+ENSG00000117983	MUC5B	-	-	protein_coding	2
+ENSG00000125872	LRRN4	-	-	protein_coding	2
+ENSG00000128536	CDHR3	-	-	protein_coding	2
+ENSG00000136688	IL36G	-	-	protein_coding	2
+ENSG00000152611	CAPSL	-	-	protein_coding	2
+ENSG00000153093	ACOXL	-	-	protein_coding	2
+ENSG00000153789	FAM92B	-	-	protein_coding	2
+ENSG00000162598	C1orf87	-	-	protein_coding	2
+ENSG00000163218	PGLYRP4	-	-	protein_coding	2
+ENSG00000178934	LGALS7B	-	-	protein_coding	2
+ENSG00000179813	FAM216B	-	-	protein_coding	2
+ENSG00000179841	AKAP5	-	-	protein_coding	2
+ENSG00000181378	CCDC108	-	-	protein_coding	2
+ENSG00000182010	RTKN2	-	-	protein_coding	2
+ENSG00000183607	GKN2	-	-	protein_coding	2
+ENSG00000183971	NPW	-	-	protein_coding	2
+ENSG00000186474	KLK12	-	-	protein_coding	2
+ENSG00000186973	FAM183A	-	-	protein_coding	2
+ENSG00000187492	CDHR4	-	-	protein_coding	2
+ENSG00000188817	SNTN	-	-	protein_coding	2
+ENSG00000189377	CXCL17	-	-	protein_coding	2
+ENSG00000197446	CYP2F1	-	-	protein_coding	2
+ENSG00000203985	LDLRAD1	-	-	protein_coding	2
+ENSG00000205076	LGALS7	-	-	protein_coding	2
+ENSG00000207811	MIR34B	-	-	miRNA	2
+ENSG00000223914	AC079630.2	-	-	lincRNA	2
+ENSG00000229415	SFTA3	-	-	protein_coding	2
+ENSG00000230062	ANKRD66	-	-	protein_coding	2
+ENSG00000231322	RPL13AP17	-	-	transcribed_processed_pseudogene	2
+ENSG00000235584	AC008268.1	-	-	lincRNA	2
+ENSG00000244280	ECEL1P2	-	-	transcribed_unprocessed_pseudogene	2
+ENSG00000252112	SNORD63	-	-	snoRNA	2
+ENSG00000252761	Y_RNA	-	-	misc_RNA	2
+ENSG00000253339	RP11-434I12.3	-	-	lincRNA	2
+ENSG00000259094	RP11-77A13.1	-	-	antisense	2
+ENSG00000260943	RP11-476D10.1	-	-	lincRNA	2
+ENSG00000261143	ADAMTS7P3	-	-	transcribed_unprocessed_pseudogene	2
+ENSG00000267137	RP11-15K2.2	-	-	antisense	2
+ENSG00000268104	SLC6A14	-	-	protein_coding	2
+ENSG00000273877	RP11-635O16.2	-	-	lincRNA	2
