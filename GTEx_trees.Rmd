@@ -15,12 +15,12 @@ In this workshop we are going to use tree-based methods to construct Gene Regula
 
 ## Introduction
 
-The expression of each gene is regulated by a set of transcription factors (TFs). If a level of TF expression is changed (e.g. a TF is knocked-down), the expression level of it's downstream target genes will be afffected. We can therfore build a model that predicts expression of a particular gene based on the expression of it's potential regulators. Then, by grouping TFs and their targets based on this coordinated co-expression, we can obtain simple Gene Regulatory Networks (GRNs).
+The expression of each gene is regulated by a set of transcription factors (TFs). If a level of TF expression is changed (e.g. a TF is knocked-down), the expression level of it's downstream target genes will be affected. We can therefore build a model that predicts expression of a particular gene based on the expression of it's (potential) regulator TFs. The TFs with higher importance in the model are more likely to be true regulators of that particular gene. By building such models for the group of genes we are interested in and linking gnese to TFs, we can obtain simple Gene Regulatory Networks (GRNs).
 
 Tree based methods are particularly suitable for this problem because:
  * they make essentially no assumptions about the nature of the relationships between TF and gene expression (which can be non-linear), 
  * they can potentially capture high-order conditional dependencies between expression patterns,
- * they can handle more samples than features,
+ * they can handle having many features,
  * their interpretability allows direct selection of important TFs.
  
 ## Setup
@@ -35,13 +35,15 @@ library(rpart.plot)
 library(ipred)
 library(ranger)
 library(party)
+
+theme_set(theme_linedraw())
 ```
 
 ## Data
 
 GTEx portal contains gene expression data for various human tissues, you can access the data [here](https://www.gtexportal.org/home/datasets#filesetFilesDiv131).  
 
-We will use transcript-per-million (TPM) normalized gene counts. This normalization accounts for different sequencing depths in different samples (i.e. features are on the same scale and comparable between samples). TPM is, however, biased by gene length (i.e. longer genes are going to have more TPMs than a shorter gene expressed at the same level). Think about this problem, how we should deal with it?
+We will use transcript-per-million (TPM) normalized gene counts. This normalization accounts for different sequencing depths in different samples (i.e. features are on the same scale and comparable between samples). TPM is, however, biased by gene length (i.e. longer genes are going to have more TPMs than a shorter gene expressed at the same level). Think about this problem, how should we deal with it?
   
 We will work with 578 lung samples. You can download the data directly from GTEx (it should not take long), or load the local copy.
 
@@ -160,13 +162,13 @@ First we will fit different regression trees to predict individual genes express
 
 * SFTPA1 - a member of SFTP gene family encoding lung surfactant proteins 
 * EPAS1 - a type of hypoxia-inducible factor, TFs involved in the induction of genes regulated by oxygen (it is induced as oxygen levels fall)
-* NKX2_1
+* AGER - lung-specific multiligand receptor for advanced glycation end-products, a member of the immunoglobulin superfamily of cell surface receptors
 
 Same approach can then be applied to all other genes.
 
 ```{r}
 # outcome variable
-gene <- "NKX2_1"
+gene <- "EPAS1"
 
 # predictor variables
 tfs <- setdiff(tfs, gene)
@@ -217,7 +219,7 @@ In addition to the cost complexity `cp`, other `rpart` parameters we can tune ar
 
 In order to automatically tune these parameters, we create a grid search and iterate through it. 
 
-```{r message=FALSE, eval=TRUE}
+```{r message=FALSE, eval=FALSE}
 hyper_grid <- expand.grid(
   minsplit = seq(20, 40, 1),
   maxdepth = seq(20, 40, 1)
@@ -308,7 +310,7 @@ The major parameter for bagging is the number of trees to average (`nbagg`, defa
 
 We can train a regression tree with bagging similarly to training a single tree, using `ipred::bagging` function. We will build models with different number of averaged trees, and retrieve out-of-the-bag OOB error for each (`ipred` does not perform CV)   
 
-```{r message=FALSE, eval=TRUE}
+```{r message=FALSE, eval=FALSE}
 require(ipred)
 
 set.seed(1950)
@@ -406,7 +408,7 @@ There are several parameters to tune for Random Forest:
 
 We will again construct the parameter grid to iterate over. We can pass it to `caret::train()` directly.
 
-```{r eval=TRUE}
+```{r eval=FALSE}
 # set up a 3-fold cross validation
 ctrl <- trainControl(method = "cv",  number = 3) 
 
@@ -487,12 +489,8 @@ Extract variable importance for model.
 # plot most important variables
 varimp <- varImp(rf_tree)
 plot(varimp, 30)  
-as.data.table(varimp$importance, keep.rownames = "Variable")[order(-Overall)]
-
-# roc
-rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
-rocimp <- as.data.table(rocimp, keep.rownames = "Variable") 
-rocimp[order(-Overall)]
+varimp_dt <- as.data.table(varimp$importance, keep.rownames = "Variable")[order(-Overall)][]
+head(varimp_dt)
 ```
 
 Use Random Forest model for prediction with test data.
@@ -509,11 +507,11 @@ ggplot(pred_df, aes(predicted, actual)) +
 
 ## Conditional Trees
 
-In all the models so far, trees were built by selecting for each split in the tree the variable that maximizes an information measure (e.g. Gini coefficient or ). This approach is inherently biased towards selecting variables with many splits, or many missing values. To tackle this, a different approach of building conditional trees uses instead significance test procedure to select variables instead. Significance is calculated for each covariate by permutations, and the one with the lowest p value is selected for split.
+In all the models so far, trees were built by selecting for each split in the tree the variable that minimizes error metric(e.g. classification error or regression RSS). This approach is inherently biased towards selecting variables with many splits, or many missing values. To tackle this, a different approach of building conditional trees employs significance test procedure to select variables. At each tree node, significance is calculated for each covariate by permutations, and the one with the lowest p value is selected for split.
 
 We will again construct the parameter grid to iterate over. We can pass it to `caret::train()` directly.
 
-```{r eval=TRUE}
+```{r eval=FALSE}
 # set up a 3-fold cross validation
 ctrl <- trainControl(method = "cv",  number = 3) 
 
@@ -587,12 +585,7 @@ Extract variable importance for model.
 varimp <- varImp(rf_tree)
 plot(varimp, 30)  
 varimp_dt <- as.data.table(varimp$importance, keep.rownames = "Variable")[order(-Overall)]
-head(varimp_dt)[[1]]
-
-# roc
-rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
-rocimp_dt <- as.data.table(rocimp, keep.rownames = "Variable")[order(-Overall)]
-head(rocimp_dt)
+head(varimp_dt)
 ```
 
 Prediction using Random Forest with conditional trees.
@@ -609,30 +602,32 @@ ggplot(pred_df, aes(predicted, actual)) +
 
 ## Downstream analysis
 
-Using the variable importance, we can build a network of regulators for our gene. The choice of how many TFs include in the netwok is a bit arbitrary at this point.
+The models described above are fit in the same way for other genes of interest. Here we will briefly inspect their overall performance.
 
-```{r}
+Load pre-calculated model errors for different genes and order them by increasing RF RMSE.
 
-```
-
-We can load pre-calculated model errors for different genes and order them by increasing RF RMSE.
-
-```{r eval=TRUE}
-dt = fread("data/genes.txt")
+```{r eval=FALSE}
+dt = fread("data/20220907225044.rmse.txt")
 setnames(dt, c("genes","model","rmse"))
-dt[,genes:=factor(genes, levels=unique(dt[model=="random_forest"][order(rmse)]$genes))]
+dt[, model:=factor(model, levels=c("decision_tree","bagging","random_forest","conditional_random_forest"))]
+dt[, genes:=factor(genes, levels=unique(dt[model=="random_forest"][order(-rmse)]$genes))]
 setorder(dt,genes,rmse)
 ```
 
 Random Forrest systematically outperforms single Decision Tree.
 
-```{r eval=TRUE, fig.width=6, fig.height=4}
-ggplot(dt[1:100], aes(genes, rmse, color=model)) +
+```{r eval=FALSE, fig.width=6, fig.height=8}
+ggplot(dt, aes(genes, rmse, color=model)) +
   geom_line(aes(group=model)) +
   geom_point() +
   theme(
-    axis.text.x = element_blank(), 
     panel.grid.major.x = element_blank(), 
-    axis.ticks.length.x = unit(0,"mm"))
+    axis.ticks.length.x = unit(0,"mm")
+  ) + coord_flip()
 ```
 
+Finally, we can use variable importance to prioritize genes for building a Gene Regrulatory Network. The choice of how many TFs to include in the network is a bit arbitrary at this point.
+
+```{r}
+var_imp <- fread("data/20220908101042.varimp.crf.txt")
+```

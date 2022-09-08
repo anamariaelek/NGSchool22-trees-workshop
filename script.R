@@ -256,21 +256,17 @@ gene_res <- sapply(genes, function(gene) {
   
   # variable importance
   varimp <- as.data.table(varImp(rf_tree)$importance, keep.rownames = "Variable") 
-  setnames(varimp, c("Overall", "varimp"))
-  rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
-  rocimp <- as.data.table(rocimp, keep.rownames = "Variable") 
-  setnames(varimp, c("Overall", "roc"))
+  setnames(varimp, "Overall", "varimp")
+  varimp[, gene:=gene]
   
   # save
-  vardt <- merge.data.table(varimp, rocimp, by="Variable", all = TRUE)[, gene:=gene]
-  fwrite(vardt, file.path(res_dir, sprintf("%s.varimp.rf.txt",name)), col.names = TRUE, sep = "\t", append = TRUE)
+  fwrite(varimp, file.path(res_dir, sprintf("%s.varimp.rf.txt",name)), col.names = TRUE, sep = "\t", append = TRUE)
   
   # to output
   rf_out <- list(
     params = tuned_grid,
     rmse = rmse,
-    varimp = varimp,
-    rocimp = rocimp
+    varimp = varimp
   )
   
   # # # # # # # # # # # # # # # # # # # #
@@ -324,21 +320,17 @@ gene_res <- sapply(genes, function(gene) {
   
   # variable importance
   varimp <- as.data.table(varImp(crf_tree)$importance, keep.rownames = "Variable") 
-  setnames(varimp, c("Overall", "varimp"))
-  rocimp <- filterVarImp(x = tpm_train[,tfs], y = tpm_train[,gene])
-  rocimp <- as.data.table(rocimp, keep.rownames = "Variable") 
-  setnames(varimp, c("Overall", "roc"))
+  setnames(varimp, "Overall", "varimp")
+  varimp[, gene:=gene]
   
   # save
-  vardt <- merge.data.table(varimp, rocimp, by="Variable", all = TRUE)[, gene:=gene]
-  fwrite(vardt, file.path(res_dir, sprintf("%s.varimp.crf.txt",name)), col.names = TRUE, sep = "\t", append = TRUE)
+  fwrite(varimp, file.path(res_dir, sprintf("%s.varimp.crf.txt",name)), col.names = TRUE, sep = "\t", append = TRUE)
   
   # to output
   crf_out <- list(
     params = tuned_grid,
     rmse = rmse,
-    varimp = varimp,
-    rocimp = rocimp
+    varimp = varimp
   )
   
   # # # # # # # # # #
