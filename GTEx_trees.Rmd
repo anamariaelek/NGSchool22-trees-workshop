@@ -15,7 +15,7 @@ In this workshop we are going to use tree-based methods to construct Gene Regula
 
 ## Introduction
 
-The expression of each gene is regulated by a set of transcription factors (TFs). If a level of TF expression is changed (e.g. a TF is knocked-down), the expression level of it's downstream target genes will be affected. We can therefore build a model that predicts expression of a particular gene based on the expression of it's (potential) regulator TFs. The TFs with higher importance in the model are more likely to be true regulators of that particular gene. By building such models for the group of genes we are interested in and linking gnese to TFs, we can obtain simple Gene Regulatory Networks (GRNs).
+The expression of each gene is regulated by a set of transcription factors (TFs). If a level of TF expression is changed (e.g. a TF is knocked-down), the expression level of it's downstream target genes will be affected. We can therefore build a model that predicts expression of a particular gene based on the expression of it's (potential) regulator TFs. The TFs with higher importance in the model are more likely to be true regulators of that particular gene. By building such models for the group of genes we are interested in, and linking gnese to TFs, we can obtain simple co-expression based Gene Regulatory Networks (GRNs).
 
 Tree based methods are particularly suitable for this problem because:
  * they make essentially no assumptions about the nature of the relationships between TF and gene expression (which can be non-linear), 
@@ -35,6 +35,7 @@ library(rpart.plot)
 library(ipred)
 library(ranger)
 library(party)
+library(bst)
 
 theme_set(theme_linedraw())
 ```
@@ -43,7 +44,7 @@ theme_set(theme_linedraw())
 
 GTEx portal contains gene expression data for various human tissues, you can access the data [here](https://www.gtexportal.org/home/datasets#filesetFilesDiv131).  
 
-We will use transcript-per-million (TPM) normalized gene counts. This normalization accounts for different sequencing depths in different samples (i.e. features are on the same scale and comparable between samples). TPM is, however, biased by gene length (i.e. longer genes are going to have more TPMs than a shorter gene expressed at the same level). Think about this problem, how should we deal with it?
+We will use transcript-per-million (TPM) normalized gene counts. This normalization accounts for different sequencing depths in different samples (i.e. features are on the same scale and comparable between samples). TPM is, however, biased by gene length (i.e. longer gene is going to have more TPMs than a shorter gene expressed at the same level). Think about this problem, how should we deal with it?
   
 We will work with 578 lung samples. You can download the data directly from GTEx (it should not take long), or load the local copy.
 
@@ -115,7 +116,7 @@ quants <- t(apply(tpm, 1, quantile))
 head(quants)
 ```
 
-Log transform the data and remove genes that are very lowly expressed in most of the samples.
+Next we log transform the data and remove genes that are very lowly expressed in most of the samples. Log transformations will spred out smaller values and bring down very large ones, primarily making it more plesant to work with the data.
 
 ```{r}
 # log transform
@@ -147,7 +148,7 @@ gp <- ggplot(dtm, aes(TPM, fill=TF)) +
 gp
 ```
 
-**Note**: A more sophisticated feature selection methods are available, they will be covered in tomorrow's lectures.  
+**Note**: A more sophisticated feature selection methods are available, they will be covered in tomorrow's lectures.
 
 Split the data into train and test samples.
 
@@ -158,17 +159,17 @@ tpm_train <- tpm[tpm_train_id, ]; nrow(tpm_train)
 tpm_test  <- tpm[-tpm_train_id, ]; nrow(tpm_test)
 ```
 
-First we will fit different regression trees to predict individual genes expression. Start with one of the following example genes for which there are pre-calculated grid search results files:  
+First we will fit different regression trees to predict individual genes expression. Start with one of the following example genes for which there are pre-calculated hyperparameter grid search results files:  
 
 * SFTPA1 - a member of SFTP gene family encoding lung surfactant proteins 
-* EPAS1 - a type of hypoxia-inducible factor, TFs involved in the induction of genes regulated by oxygen (it is induced as oxygen levels fall)
+* EPAS1 - a type of hypoxia-inducible factors, TFs involved in the induction of genes regulated by oxygen (it is induced as oxygen levels fall)
 * AGER - lung-specific multiligand receptor for advanced glycation end-products, a member of the immunoglobulin superfamily of cell surface receptors
 
 Same approach can then be applied to all other genes.
 
 ```{r}
 # outcome variable
-gene <- "EPAS1"
+gene <- "SFTPA1"
 
 # predictor variables
 tfs <- setdiff(tfs, gene)
@@ -178,7 +179,7 @@ tfs <- setdiff(tfs, gene)
 
 ## Regression Tree Model
 
-Use `rpart::tree()` function to fit decision tree model.
+We will first use `rpart::tree()` function to fit decision tree model.
 
 ```{r fig.height=5, fig.width=8}
 require(rpart)
@@ -197,9 +198,13 @@ require(rpart.plot)
 rpart.plot(tpm_tree)
 ```
 
-The tree is showing the percentage of data that fall to each node, and the average TPM for corresponding branch
+The tree is showing the percentage of data that fall to each node, and the average log transformed TPM for corresponding branch.
 
-`rpart` automatically performs a 10-fold cross validation for a range of cost complexity $\alpha$ values (`cp` parameter passed to `rpart.control`) to prune the tree. We can look at the reduction in cross-validation error with increased number of splits.
+Setting parameters for building a decision tree is very important because decision trees are non-parametric models - meaning not that they have no parameters, but rather, that the number of parameters is not defined before fitting the model (unlike, for example in regression). If we don't define any hyperparameters that would restrict the whole process, in theory, a very complex decision tree could be build that very closely matches the training data, and obviously is overfitting.  
+
+`rpart` implementation of tree bullding algorithm automatically performs a cross validation for a range of cost complexity values `cp` used to prune the tree. Pruning means that any split that does not improve the performance by a factor of `cp` is not attempted - this both saves computational time and prevents overfitting.
+
+We can look at the reduction in cross-validation error with increased number of splits.
 
 ```{r fig.height=4, fig.width=6}
 plotcp(tpm_tree)
@@ -217,16 +222,19 @@ In addition to the cost complexity `cp`, other `rpart` parameters we can tune ar
 * `minsplit`, the minimum number of data points required to attempt a split before it is forced to create a terminal node (default is 20)  
 * `maxdepth`, the maximum number of internal nodes between the root node and the terminal nodes (default is 30).  
 
-In order to automatically tune these parameters, we create a grid search and iterate through it. 
-
+In order to automatically tune the values of decision tree parameters, we create a search grid and iterate over it. 
 ```{r message=FALSE, eval=FALSE}
 hyper_grid <- expand.grid(
-  minsplit = seq(20, 40, 1),
-  maxdepth = seq(20, 40, 1)
+  minsplit = seq(20, 50, 2),
+  maxdepth = seq(20, 50, 2)
 )
- # 
+# total combinations
 nrow(hyper_grid)
+```
 
+Note that this is many combinations to test for, and it will take a lot of time. For this reason, don't run the code below, we will load pre-calculated grid search results instead. 
+
+```{r}
 # loop over grid search
 set.seed(1950)
 tpm_list <- lapply(1:nrow(hyper_grid), function(i) {
@@ -257,7 +265,7 @@ hyper_grid <- cbind(hyper_grid, tpm_cp)
 fwrite(hyper_grid, file = sprintf("data/hypergrid.tree.%s.csv",gene))
 ```
 
-After building all the models, we select the one with lowest CV error.
+After building all the models, we select the parameters with lowest CV error.
 
 ```{r fig.height=6, fig.width=6}
 hyper_grid <- fread(sprintf("data/hypergrid.tree.%s.csv",gene))
@@ -304,11 +312,11 @@ ggplot(pred_df, aes(predicted, actual)) +
 
 ## Bagging
 
-The major parameter for bagging is the number of trees to average (`nbagg`, default is 25). Increasing this value results in lower error, but after the initial drop, it soon becomes stable.   
+First ensemble method we will try is Bagging. Main parameter for bagging is the number of trees to average (`nbagg`, default is 25). Increasing this value results in lower error, but after the initial drop, it soon becomes stable.   
 
 ### `ipred`
 
-We can train a regression tree with bagging similarly to training a single tree, using `ipred::bagging` function. We will build models with different number of averaged trees, and retrieve out-of-the-bag OOB error for each (`ipred` does not perform CV)   
+We can train a regression tree with bagging similarly to training a single tree, using `ipred::bagging` function. We will build models with different number of averaged trees, and retrieve out-of-the-bag OOB error for each (`ipred` does not perform CV).   
 
 ```{r message=FALSE, eval=FALSE}
 require(ipred)
@@ -332,14 +340,13 @@ rmse_df <- data.frame(nbagg, rmse)
 fwrite(rmse_df, file = sprintf("data/hypergrid.bagging.%s.csv",gene))
 ```
 
-We can build a model using best parameter from grid search.
+We can build a model using best performing `nbagg` value. This will take a bit longer than building a single tree.
 
 ```{r}
 # load precalculated values
 rmse_df <- fread(sprintf("data/hypergrid.bagging.%s.csv",gene))
 ggplot(rmse_df, aes(nbagg, rmse)) + 
-  geom_line() + 
-  geom_vline(xintercept = 25, col = "red")
+  geom_line()
 
 # fit model using these parameters
 ntree <- rmse_df[which.min(rmse_df$rmse),]$nbagg
@@ -363,7 +370,7 @@ ggplot(pred_df, aes(predicted, actual)) +
   geom_smooth(method='lm', formula=y~x)
 ```
 
-Notice that this is only a slight improvement over simple regression tree.
+Notice that this is a slight improvement over simple regression tree.
 
 ### `caret`
 
@@ -394,6 +401,7 @@ bagging_tree
 
 # plot most important variables
 plot(varImp(bagging_tree), 30)  
+
 ```
 
 ## Random Forest
@@ -422,7 +430,7 @@ hyper_grid <- expand.grid(
 # total number of combinations
 nrow(hyper_grid)
 
-# build models without CV or importance calculation
+# build models 
 rf_tree <- caret::train(
   x = tpm_train[,tfs],
   y = tpm_train[,gene],
@@ -462,7 +470,7 @@ ctrl <- trainControl(method = "cv",  number = 10)
 
 # parameter grid with fixed best values
 i <- which.min(grid_res$RMSE)
-tuned_grid <- expand.grid(
+tuned_grid <- data.frame(
   splitrule = "variance", 
   mtry = grid_res$mtry[i],
   min.node.size = grid_res$min.node.size[i]
@@ -505,9 +513,104 @@ ggplot(pred_df, aes(predicted, actual)) +
     geom_smooth(method='lm', formula=y~x) 
 ```
 
+## Boosting
+
+```{r eval=FALSE}
+# set up a 3-fold cross validation
+ctrl <- trainControl(method = "cv",  number = 3) 
+
+# parameter grid search
+hyper_grid <- expand.grid(
+  mstop = seq(100, 200, 20),
+  maxdepth = seq(10, 30, 2),
+  nu = c(0.001, 0.01, 0.1)
+)
+
+# total number of combinations
+nrow(hyper_grid)
+
+# build models
+bst_tree <- caret::train(
+  x = tpm_train[,tfs],
+  y = tpm_train[,gene],
+  method = "bstTree",
+  trControl = ctrl,
+  tuneGrid = hyper_grid
+)
+
+# save
+grid_res <- bst_tree$results
+fwrite(grid_res, file = sprintf("data/hypergrid.bst.%s.csv",gene))
+```
+
+Visualize results of grid search.
+
+```{r fig.height=6, fig.width=5}
+# load grid search results
+grid_res <- fread(sprintf("data/hypergrid.bst.%s.csv",gene))
+
+ggplot(grid_res, aes(mstop, maxdepth, fill = RMSE)) + 
+  geom_tile() + scale_fill_viridis_c(direction = -1)
+
+ggplot(grid_res, aes(mstop, nu, fill = RMSE)) + 
+  geom_tile() + scale_fill_viridis_c(direction = -1)
+
+# top parameter combinations
+grid_res[order(RMSE)][1:5]
+```
+
+Select best parameters obtained from grid search and build the model.
+
+```{r}
+# set up a 10-fold cross validation
+ctrl <- trainControl(method = "cv",  number = 10) 
+
+# parameter grid with fixed best values
+i <- which.min(grid_res$RMSE)
+tuned_grid <- data.frame(
+  mstop = grid_res$mstop[i],
+  maxdepth = grid_res$maxdepth[i],
+  nu = grid_res$nu[i]
+)
+
+# CV rf model with importance calculation
+bst_tree <- caret::train(
+  x = tpm_train[,tfs],
+  y = tpm_train[,gene],
+  method = "bstTree",
+  trControl = ctrl,
+  tuneGrid = tuned_grid
+)
+
+# assess results
+bst_tree
+```
+
+Extract variable importance for model.
+
+```{r fig.height=6, fig.width=4}
+# plot most important variables
+varimp <- varImp(bst_tree)
+plot(varimp, 30)  
+varimp_dt <- as.data.table(varimp$importance, keep.rownames = "Variable")[order(-Overall)][]
+head(varimp_dt)
+```
+
+Use Boosting model for prediction with test data.
+
+```{r fig.width=6, fig.height=6}
+pred <- predict(bst_tree, tpm_test[, tfs])
+RMSE(pred = pred, obs = tpm_test[, gene])
+
+pred_df <- data.frame(predicted=pred, actual=tpm_test[, gene])
+ggplot(pred_df, aes(predicted, actual)) + 
+    geom_point() + 
+    geom_smooth(method='lm', formula=y~x) 
+```
+
 ## Conditional Trees
 
-In all the models so far, trees were built by selecting for each split in the tree the variable that minimizes error metric(e.g. classification error or regression RSS). This approach is inherently biased towards selecting variables with many splits, or many missing values. To tackle this, a different approach of building conditional trees employs significance test procedure to select variables. At each tree node, significance is calculated for each covariate by permutations, and the one with the lowest p value is selected for split.
+In all the models so far, trees were built by selecting for each split in the tree the variable that minimizes error metric (e.g. classification error or regression RSS). This approach is inherently biased towards selecting categorical variables with many splits or many missing values, and it tends to prefer continous variables over categorical ones. Conditional trees tackle this problem by employing significance test procedure to select variables to split the tree. At each tree node, significance is calculated for each potential variables, and the one with the lowest p value is selected for split. You can probably already understand that this comes at a significant computational cost, and fiting a tree takes more time.
 
 We will again construct the parameter grid to iterate over. We can pass it to `caret::train()` directly.
 
@@ -607,7 +710,7 @@ The models described above are fit in the same way for other genes of interest. 
 Load pre-calculated model errors for different genes and order them by increasing RF RMSE.
 
 ```{r eval=FALSE}
-dt = fread("data/20220907225044.rmse.txt")
+dt = fread("data/20220908101042.rmse.txt")
 setnames(dt, c("genes","model","rmse"))
 dt[, model:=factor(model, levels=c("decision_tree","bagging","random_forest","conditional_random_forest"))]
 dt[, genes:=factor(genes, levels=unique(dt[model=="random_forest"][order(-rmse)]$genes))]
@@ -629,5 +732,35 @@ ggplot(dt, aes(genes, rmse, color=model)) +
 Finally, we can use variable importance to prioritize genes for building a Gene Regrulatory Network. The choice of how many TFs to include in the network is a bit arbitrary at this point.
 
 ```{r}
-var_imp <- fread("data/20220908101042.varimp.crf.txt")
+var_imp <- fread("data/20220908101042.varimp.rf.txt")
+setorder(var_imp, gene, -varimp)
+var_imp[,i:=1:nrow(.SD), by=gene]
+ggplot(var_imp, aes(i, varimp, group=gene)) +
+  geom_line()
+
+ggplot(var_imp[i<50], aes(i, varimp, group=gene)) +
+  geom_line()
+
 ```
+
+Plot network graph.
+
+```{r fig.width=12, fig.height=10}
+
+require(tidygraph)
+set.seed(1950)
+varimp_top <- var_imp[varimp>25]
+
+nodes <- data.frame(id = unique(c(varimp_top$Variable, varimp_top$gene)))
+edges <- data.frame(from=varimp_top$Variable, to=varimp_top$gene, importance=varimp_top$varimp)
+
+gp_tidy <- tbl_graph(nodes = nodes, edges = edges, directed = FALSE)  %>%
+  mutate(centrality = centrality_degree(mode = 'in'))
+
+gp_plot <- ggraph(gp_tidy, layout = "graphopt") +
+  geom_node_point(aes(size = centrality), show.legend = FALSE) +
+  geom_edge_link(aes(alpha = importance), show.legend = FALSE) +
+  scale_edge_width(range = c(0.2, 2)) +
+  geom_node_text(aes(filter=centrality > 3, label = id), color="red", repel = TRUE)
+```
+
